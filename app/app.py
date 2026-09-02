@@ -1,30 +1,65 @@
 import sys
 from pathlib import Path
+import tempfile
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-
-import streamlit as st
-import scanpy as sc
 import pandas as pd
+import streamlit as st
 
-from src.analysis.load_data import load_pbmc3k
-from src.qc.basic_qc import calculate_basic_qc
-from src.analysis.preprocess import preprocess_scrna
-from src.analysis.clustering import cluster_cells
-from src.analysis.cell_types import annotate_clusters
 
-from src.artifacts.low_quality import flag_low_quality_cells
-from src.artifacts.doublets import detect_doublets
-from src.artifacts.stress import calculate_stress_score
-from src.artifacts.ambient_rna import (
-    calculate_ambient_rna_evidence
+PROJECT_ROOT = Path(
+    __file__
+).resolve().parents[1]
+
+sys.path.insert(
+    0,
+    str(PROJECT_ROOT),
 )
+
+
+from src.analysis.load_data import (
+    load_scrna_file,
+    load_10x_mtx,
+    validate_scrna,
+)
+
+from src.qc.basic_qc import (
+    calculate_basic_qc,
+)
+
+from src.artifacts.low_quality import (
+    flag_low_quality_cells,
+)
+
+from src.artifacts.doublets import (
+    detect_doublets,
+)
+
+from src.artifacts.ambient_rna import (
+    calculate_ambient_rna_evidence,
+)
+
+from src.artifacts.stress import (
+    calculate_stress_score,
+)
+
 from src.artifacts.evidence import (
-    aggregate_artifact_evidence
+    aggregate_artifact_evidence,
+)
+
+from src.artifacts.debug_report import (
+    generate_debug_report,
+)
+
+from src.analysis.preprocess import (
+    preprocess_scrna,
+)
+
+from src.analysis.clustering import (
+    cluster_cells,
+)
+
+from src.analysis.cell_types import (
+    annotate_clusters,
 )
 
 from src.analysis.correction import (
@@ -32,24 +67,23 @@ from src.analysis.correction import (
     reanalyze,
 )
 
+from src.analysis.comparison import (
+    compare_before_after,
+)
+
 from src.analysis.trust_score import (
     calculate_trust_score,
     interpret_trust_score,
 )
 
-from src.analysis.reporting import (
-    build_scrna_report,
+from src.variants.load_vcf import (
+    load_vcf,
 )
 
-from src.variants.load_vcf import load_vcf
 from src.variants.variant_debugger import (
     debug_variants,
 )
 
-
-# =========================================================
-# PAGE
-# =========================================================
 
 st.set_page_config(
     page_title="Biomedical Data Debugger",
@@ -58,30 +92,18 @@ st.set_page_config(
 )
 
 
-# =========================================================
-# HEADER
-# =========================================================
-
-st.title("🧬 Biomedical Data Debugger")
-
-st.subheader(
-    "Artifact vs. True Biology"
+st.title(
+    "🧬 Biomedical Data Debugger"
 )
 
-st.write(
+st.caption(
     "Don't trust the biological conclusion "
     "until you debug the data."
 )
 
 
-# =========================================================
-# MODULE
-# =========================================================
-
-st.sidebar.header("1. Choose Module")
-
-module = st.sidebar.radio(
-    "Debugger module",
+module = st.sidebar.selectbox(
+    "Analysis module",
     [
         "Single-cell RNA-seq",
         "DNA Variant Debugger",
@@ -89,835 +111,831 @@ module = st.sidebar.radio(
 )
 
 
-# =========================================================
-# SC-RNA MODULE
-# =========================================================
+# ============================================================
+# SINGLE-CELL RNA-SEQ
+# ============================================================
 
 if module == "Single-cell RNA-seq":
 
-    st.sidebar.header("2. Input Data")
-
-    input_method = st.sidebar.radio(
-        "Choose dataset",
-        [
-            "Demo dataset",
-            "Upload scRNA-seq (.h5ad)",
-        ],
+    st.header(
+        "Single-cell RNA-seq Debugger"
     )
 
-    adata = None
+    st.write(
+        "Investigate whether apparent cellular "
+        "structure is biologically coherent or "
+        "potentially driven by technical artifacts."
+    )
 
-    # -----------------------------------------------------
-    # DEMO
-    # -----------------------------------------------------
+    st.subheader(
+        "1. Dataset"
+    )
 
-    if input_method == "Demo dataset":
+    uploaded_file = st.file_uploader(
+        "Upload an scRNA-seq dataset",
+        type=[
+            "h5ad",
+            "h5",
+        ],
+        help=(
+            "Supported: AnnData .h5ad and "
+            "10x Genomics .h5."
+        ),
+    )
 
-        st.sidebar.success(
-            "PBMC3k demonstration dataset selected."
+    st.caption(
+        "10x Matrix Market datasets can be added "
+        "in the advanced input section below."
+    )
+
+    # --------------------------------------------------------
+    # Advanced Matrix Market upload
+    # --------------------------------------------------------
+
+    with st.expander(
+        "Advanced: 10x Matrix Market input"
+    ):
+
+        matrix_file = st.file_uploader(
+            "matrix.mtx or matrix.mtx.gz",
+            type=[
+                "mtx",
+                "gz",
+            ],
+            key="matrix_file",
         )
 
-        run_demo = st.sidebar.button(
-            "Run scRNA-seq Debugger"
+        barcodes_file = st.file_uploader(
+            "barcodes.tsv or barcodes.tsv.gz",
+            type=[
+                "tsv",
+                "gz",
+            ],
+            key="barcodes_file",
         )
 
-        if run_demo:
-            adata = load_pbmc3k()
-
-    # -----------------------------------------------------
-    # UPLOAD
-    # -----------------------------------------------------
-
-    else:
-
-        uploaded_file = st.sidebar.file_uploader(
-            "Upload an AnnData scRNA-seq dataset",
-            type=["h5ad"],
+        features_file = st.file_uploader(
+            "features.tsv, genes.tsv, or compressed equivalent",
+            type=[
+                "tsv",
+                "gz",
+            ],
+            key="features_file",
         )
 
-        if uploaded_file is not None:
+    st.subheader(
+        "2. Debugging settings"
+    )
 
-            try:
+    col1, col2, col3 = st.columns(3)
 
-                adata = sc.read_h5ad(
-                    uploaded_file
-                )
+    with col1:
 
-                st.sidebar.success(
-                    "Dataset loaded successfully."
-                )
-
-                st.sidebar.write(
-                    f"Cells: {adata.n_obs}"
-                )
-
-                st.sidebar.write(
-                    f"Genes: {adata.n_vars}"
-                )
-
-            except Exception as e:
-
-                st.sidebar.error(
-                    "Could not read this .h5ad file."
-                )
-
-                st.sidebar.exception(e)
-
-        run_uploaded = st.sidebar.button(
-            "Run scRNA-seq Debugger"
+        min_genes = st.number_input(
+            "Minimum genes per cell",
+            min_value=0,
+            value=200,
+            step=25,
         )
 
-        if not run_uploaded:
-            adata = None
+    with col2:
 
-    # =====================================================
-    # RUN
-    # =====================================================
+        max_mito = st.number_input(
+            "Maximum mitochondrial %",
+            min_value=0.0,
+            max_value=100.0,
+            value=20.0,
+            step=1.0,
+        )
 
-    if adata is not None:
+    with col3:
 
-        with st.spinner(
-            "Running scRNA-seq debugger..."
-        ):
+        doublet_rate = st.number_input(
+            "Expected doublet rate",
+            min_value=0.0,
+            max_value=0.50,
+            value=0.05,
+            step=0.01,
+        )
 
-            # -------------------------------------------------
-            # QC
-            # -------------------------------------------------
+    run_debugger = st.button(
+        "Run scRNA-seq Debugger",
+        type="primary",
+        use_container_width=True,
+    )
 
-            adata = calculate_basic_qc(
-                adata
-            )
+    if run_debugger:
 
-            adata = flag_low_quality_cells(
-                adata
-            )
+        try:
 
-            # -------------------------------------------------
-            # DOUBLETS
-            # -------------------------------------------------
+            # ==================================================
+            # LOAD
+            # ==================================================
 
-            adata = detect_doublets(
-                adata
-            )
+            with st.spinner(
+                "Loading dataset..."
+            ):
 
-            # -------------------------------------------------
-            # STRESS
-            # -------------------------------------------------
+                if uploaded_file is not None:
 
-            adata = calculate_stress_score(
-                adata
-            )
+                    suffix = Path(
+                        uploaded_file.name
+                    ).suffix
 
-            # -------------------------------------------------
-            # BIOLOGICAL STRUCTURE
-            # -------------------------------------------------
+                    with tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=suffix,
+                    ) as temp:
 
-            analysis_adata = preprocess_scrna(
-                adata
-            )
+                        temp.write(
+                            uploaded_file.getbuffer()
+                        )
 
-            analysis_adata = cluster_cells(
-                analysis_adata
-            )
+                        temp_path = temp.name
 
-            analysis_adata = annotate_clusters(
-                analysis_adata
-            )
-
-            adata.obs["leiden"] = (
-                analysis_adata.obs["leiden"]
-            )
-
-            adata.uns["cluster_cell_types"] = (
-                analysis_adata.uns[
-                    "cluster_cell_types"
-                ]
-            )
-
-            # -------------------------------------------------
-            # LINEAGE EVIDENCE
-            # -------------------------------------------------
-
-            analysis_adata = (
-                calculate_ambient_rna_evidence(
-                    analysis_adata
-                )
-            )
-
-            for column in analysis_adata.obs.columns:
-
-                if column.startswith(
-                    "ambient_"
-                ):
-
-                    adata.obs[column] = (
-                        analysis_adata.obs[column]
+                    adata = load_scrna_file(
+                        temp_path
                     )
 
-            adata.uns["ambient_marker_scores"] = (
-                analysis_adata.uns[
-                    "ambient_marker_scores"
-                ]
-            )
+                elif (
+                    matrix_file is not None
+                    and barcodes_file is not None
+                    and features_file is not None
+                ):
 
-            # -------------------------------------------------
-            # EVIDENCE
-            # -------------------------------------------------
+                    with tempfile.TemporaryDirectory() as temp_dir:
 
-            adata = aggregate_artifact_evidence(
+                        temp_dir = Path(
+                            temp_dir
+                        )
+
+                        matrix_path = (
+                            temp_dir
+                            / matrix_file.name
+                        )
+
+                        barcodes_path = (
+                            temp_dir
+                            / barcodes_file.name
+                        )
+
+                        features_path = (
+                            temp_dir
+                            / features_file.name
+                        )
+
+                        matrix_path.write_bytes(
+                            matrix_file.getbuffer()
+                        )
+
+                        barcodes_path.write_bytes(
+                            barcodes_file.getbuffer()
+                        )
+
+                        features_path.write_bytes(
+                            features_file.getbuffer()
+                        )
+
+                        adata = load_10x_mtx(
+                            temp_dir
+                        )
+
+                else:
+
+                    # Demo fallback
+                    from src.analysis.load_data import (
+                        load_pbmc3k
+                    )
+
+                    adata = load_pbmc3k()
+
+            validation = validate_scrna(
                 adata
             )
 
-            # -------------------------------------------------
-            # BEFORE
-            # -------------------------------------------------
+            st.success(
+                "Dataset loaded successfully."
+            )
 
-            before_cells = adata.n_obs
+            # ==================================================
+            # DATASET SUMMARY
+            # ==================================================
 
-            flagged_cells = int(
-                adata.obs[
-                    "requires_investigation"
+            st.subheader(
+                "Dataset Summary"
+            )
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "Cells",
+                validation["cells"],
+            )
+
+            c2.metric(
+                "Genes",
+                validation["genes"],
+            )
+
+            c3.metric(
+                "Layers",
+                len(
+                    validation["layers"]
+                ),
+            )
+
+            # ==================================================
+            # QC
+            # ==================================================
+
+            with st.spinner(
+                "Calculating quality-control metrics..."
+            ):
+
+                adata = calculate_basic_qc(
+                    adata
+                )
+
+                adata = flag_low_quality_cells(
+                    adata,
+                    min_genes=min_genes,
+                    max_mito_percent=max_mito,
+                )
+
+            # ==================================================
+            # ARTIFACT DETECTION
+            # ==================================================
+
+            with st.spinner(
+                "Investigating technical artifacts..."
+            ):
+
+                adata = detect_doublets(
+                    adata,
+                    expected_doublet_rate=doublet_rate,
+                )
+
+                adata = calculate_ambient_rna_evidence(
+                    adata
+                )
+
+                adata = calculate_stress_score(
+                    adata
+                )
+
+            # ==================================================
+            # BIOLOGICAL STRUCTURE
+            # ==================================================
+
+            with st.spinner(
+                "Analyzing cellular structure..."
+            ):
+
+                processed = preprocess_scrna(
+                    adata
+                )
+
+                processed = cluster_cells(
+                    processed
+                )
+
+                processed = annotate_clusters(
+                    processed
+                )
+
+            # Transfer artifact information
+            # onto clustered dataset.
+            for column in adata.obs.columns:
+
+                if column not in processed.obs:
+
+                    processed.obs[
+                        column
+                    ] = adata.obs.loc[
+                        processed.obs_names,
+                        column,
+                    ]
+
+            processed.uns.update(
+                adata.uns
+            )
+
+            # ==================================================
+            # EVIDENCE AGGREGATION
+            # ==================================================
+
+            processed = aggregate_artifact_evidence(
+                processed
+            )
+
+            reports = generate_debug_report(
+                processed
+            )
+
+            # ==================================================
+            # OVERVIEW
+            # ==================================================
+
+            st.subheader(
+                "Debugging Overview"
+            )
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric(
+                "Cells analyzed",
+                processed.n_obs,
+            )
+
+            c2.metric(
+                "Cells requiring investigation",
+                len(reports),
+            )
+
+            c3.metric(
+                "Clusters",
+                processed.obs[
+                    "leiden"
+                ].nunique(),
+            )
+
+            doublet_status = processed.uns.get(
+                "doublet_detection_status",
+                "unknown",
+            )
+
+            c4.metric(
+                "Doublet detection",
+                (
+                    "Completed"
+                    if doublet_status == "completed"
+                    else "Limited"
+                ),
+            )
+
+            # ==================================================
+            # ARTIFACT BREAKDOWN
+            # ==================================================
+
+            st.subheader(
+                "Artifact Evidence Breakdown"
+            )
+
+            low_quality_count = int(
+                processed.obs[
+                    "low_quality_flag"
                 ].sum()
             )
 
-            before_clusters = (
-                adata.obs["leiden"].nunique()
+            doublet_count = int(
+                processed.obs[
+                    "predicted_doublet"
+                ].sum()
             )
 
-            # -------------------------------------------------
-            # CORRECTION
-            # -------------------------------------------------
-
-            corrected = (
-                correct_suspicious_cells(
-                    adata
-                )
+            stress_count = int(
+                processed.obs[
+                    "stress_flag"
+                ].sum()
             )
 
-            # -------------------------------------------------
-            # REANALYSIS
-            # -------------------------------------------------
-
-            corrected = reanalyze(
-                corrected
+            ambient_count = int(
+                processed.obs[
+                    "ambient_evidence"
+                ].sum()
             )
 
-            after_cells = corrected.n_obs
-
-            after_clusters = (
-                corrected.obs["leiden"].nunique()
-            )
-
-            # -------------------------------------------------
-            # TRUST
-            # -------------------------------------------------
-
-            trust_score = (
-                calculate_trust_score(
-                    before_cells,
-                    after_cells,
-                    before_clusters,
-                    after_clusters,
-                    flagged_cells,
-                )
-            )
-
-            interpretation = (
-                interpret_trust_score(
-                    trust_score
-                )
-            )
-
-            # -------------------------------------------------
-            # REPORT
-            # -------------------------------------------------
-
-            report_summary, report_df = (
-                build_scrna_report(
-                    adata,
-                    before_cells,
-                    after_cells,
-                    before_clusters,
-                    after_clusters,
-                    flagged_cells,
-                    trust_score,
-                    interpretation,
-                )
-            )
-
-        # =====================================================
-        # SUCCESS
-        # =====================================================
-
-        st.success(
-            "scRNA-seq debugging completed."
-        )
-
-        # =====================================================
-        # MAIN SUMMARY
-        # =====================================================
-
-        st.header(
-            "Debugging Summary"
-        )
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric(
-                "Cells Before",
-                before_cells
-            )
-
-        with col2:
-            st.metric(
-                "Flagged",
-                flagged_cells
-            )
-
-        with col3:
-            st.metric(
-                "Cells After",
-                after_cells
-            )
-
-        with col4:
-            st.metric(
-                "Trust Score",
-                f"{trust_score}/100"
-            )
-
-        # =====================================================
-        # WHAT HAPPENED?
-        # =====================================================
-
-        st.header(
-            "What Did the Debugger Find?"
-        )
-
-        low_quality = int(
-            adata.obs[
-                "low_quality_flag"
-            ].sum()
-        )
-
-        doublets = int(
-            adata.obs[
-                "predicted_doublet"
-            ].sum()
-        )
-
-        stress = int(
-            adata.obs[
-                "stress_flag"
-            ].sum()
-        )
-
-        ambient = int(
-            adata.obs[
-                "ambient_evidence"
-            ].sum()
-        )
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric(
-                "Low Quality",
-                low_quality
-            )
-
-        with col2:
-            st.metric(
-                "Potential Doublets",
-                doublets
-            )
-
-        with col3:
-            st.metric(
-                "High Stress",
-                stress
-            )
-
-        with col4:
-            st.metric(
-                "Lineage Evidence",
-                ambient
-            )
-
-        st.caption(
-            "Lineage-marker evidence is a screening "
-            "signal and does not prove ambient RNA."
-        )
-
-        # =====================================================
-        # BEFORE / AFTER
-        # =====================================================
-
-        st.header(
-            "Before vs. After Debugging"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.subheader(
-                "Before Debugging"
-            )
-
-            st.write(
-                f"Cells: {before_cells}"
-            )
-
-            st.write(
-                f"Clusters: {before_clusters}"
-            )
-
-        with col2:
-
-            st.subheader(
-                "After Correction"
-            )
-
-            st.write(
-                f"Cells: {after_cells}"
-            )
-
-            st.write(
-                f"Clusters: {after_clusters}"
-            )
-
-        # =====================================================
-        # BIOLOGICAL CONCLUSION
-        # =====================================================
-
-        st.header(
-            "Biological Conclusion"
-        )
-
-        st.info(
-            interpretation
-        )
-
-        # =====================================================
-        # SUSPICIOUS CELLS
-        # =====================================================
-
-        st.header(
-            "Evidence-Level Investigation"
-        )
-
-        if len(report_df) > 0:
-
-            st.dataframe(
-                report_df,
-                use_container_width=True,
-            )
-
-            csv = report_df.to_csv(
-                index=False
-            )
-
-            st.download_button(
-                "Download Suspicious Cell Report",
-                data=csv,
-                file_name=(
-                    "scrna_debug_report.csv"
-                ),
-                mime="text/csv",
-            )
-
-            # Detailed reasons
-            for _, row in report_df.iterrows():
-
-                with st.expander(
-                    f"{row['Cell']} — "
-                    f"{row['Likely Cell Type']}"
-                ):
-
-                    st.write(
-                        f"Cluster: {row['Cluster']}"
-                    )
-
-                    st.write(
-                        f"Evidence count: "
-                        f"{row['Evidence Count']}"
-                    )
-
-                    st.write(
-                        f"Why flagged: "
-                        f"{row['Reasons']}"
-                    )
-
-                    st.write(
-                        f"Recommendation: "
-                        f"{row['Recommendation']}"
-                    )
-
-        else:
-
-            st.success(
-                "No cells currently require investigation."
-            )
-
-        # =====================================================
-        # INTERPRETATION
-        # =====================================================
-
-        st.header(
-            "Debugger Interpretation"
-        )
-
-        st.write(
-            "The debugger does not claim that flagged "
-            "cells are biologically false. It identifies "
-            "cells with multiple independent technical "
-            "signals and evaluates whether the overall "
-            "biological structure changes after correction."
-        )
-
-        st.caption(
-            "Trust score is a prototype interpretability "
-            "metric and is not a validated statistical "
-            "confidence measure."
-        )
-
-    else:
-
-        st.info(
-            "Choose a dataset from the sidebar "
-            "to begin debugging."
-        )
-
-        st.markdown(
-            """
-### scRNA-seq Debugger
-
-Upload an `.h5ad` AnnData dataset or use the
-PBMC3k demonstration dataset.
-
-The debugger investigates:
-
-- Quality problems
-- Potential doublets
-- Stress responses
-- Lineage-marker evidence
-- Suspicious cells
-- Biological structure
-- Correction effects
-- Before/after stability
-            """
-        )
-
-
-# =========================================================
-# DNA VARIANT MODULE
-# =========================================================
-
-else:
-
-    st.sidebar.header("2. Input Data")
-
-    input_method = st.sidebar.radio(
-        "Choose variant dataset",
-        [
-            "Demo VCF",
-            "Upload VCF",
-        ],
-    )
-
-    vcf = None
-
-    # -----------------------------------------------------
-    # DEMO VCF
-    # -----------------------------------------------------
-
-    if input_method == "Demo VCF":
-
-        st.sidebar.success(
-            "Synthetic demonstration VCF selected."
-        )
-
-        run_demo = st.sidebar.button(
-            "Run DNA Variant Debugger"
-        )
-
-        if run_demo:
-
-            vcf = load_vcf(
-                "data/raw/test_variants.vcf"
-            )
-
-    # -----------------------------------------------------
-    # UPLOAD VCF
-    # -----------------------------------------------------
-
-    else:
-
-        uploaded_vcf = st.sidebar.file_uploader(
-            "Upload a VCF file",
-            type=["vcf"],
-        )
-
-        if uploaded_vcf is not None:
-
-            try:
-
-                vcf = load_vcf(
-                    uploaded_vcf
-                )
-
-                st.sidebar.success(
-                    "VCF loaded successfully."
-                )
-
-                st.sidebar.write(
-                    f"Variants: {len(vcf)}"
-                )
-
-            except Exception as e:
-
-                st.sidebar.error(
-                    "Could not read this VCF file."
-                )
-
-                st.sidebar.exception(e)
-
-        run_vcf = st.sidebar.button(
-            "Run DNA Variant Debugger"
-        )
-
-        if not run_vcf:
-            vcf = None
-
-    # =====================================================
-    # RUN
-    # =====================================================
-
-    if vcf is not None:
-
-        with st.spinner(
-            "Running DNA variant debugger..."
-        ):
-
-            reports = debug_variants(
-                vcf
-            )
-
-        st.success(
-            "DNA variant debugging completed."
-        )
-
-        # =================================================
-        # SUMMARY
-        # =================================================
-
-        total_variants = len(
-            reports
-        )
-
-        suspicious_variants = sum(
-            report[
-                "requires_investigation"
-            ]
-            for report in reports
-        )
-
-        clean_variants = (
-            total_variants
-            - suspicious_variants
-        )
-
-        st.header(
-            "Variant Debugging Summary"
-        )
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.metric(
-                "Variants",
-                total_variants
-            )
-
-        with col2:
-            st.metric(
-                "Require Investigation",
-                suspicious_variants
-            )
-
-        with col3:
-            st.metric(
-                "No Major Evidence",
-                clean_variants
-            )
-
-        # =================================================
-        # EVIDENCE TABLE
-        # =================================================
-
-        st.header(
-            "Variant Evidence"
-        )
-
-        table_rows = []
-
-        for report in reports:
-
-            table_rows.append(
+            artifact_df = pd.DataFrame(
                 {
-                    "Variant": report[
-                        "variant"
+                    "Evidence type": [
+                        "Low quality",
+                        "Potential doublet",
+                        "High stress",
+                        "Unexpected lineage-marker signal",
                     ],
-                    "Depth": report[
-                        "depth"
+                    "Cells": [
+                        low_quality_count,
+                        doublet_count,
+                        stress_count,
+                        ambient_count,
                     ],
-                    "Allele Fraction": report[
-                        "allele_fraction"
-                    ],
-                    "Mapping Quality": report[
-                        "mapping_quality"
-                    ],
-                    "Evidence Count": report[
-                        "artifact_evidence"
-                    ],
-                    "Status": (
-                        "Investigate"
-                        if report[
-                            "requires_investigation"
-                        ]
-                        else "No major evidence"
-                    ),
                 }
             )
 
-        variant_df = pd.DataFrame(
-            table_rows
-        )
-
-        st.dataframe(
-            variant_df,
-            use_container_width=True,
-        )
-
-        st.download_button(
-            "Download Variant Debug Report",
-            data=variant_df.to_csv(
-                index=False
-            ),
-            file_name=(
-                "variant_debug_report.csv"
-            ),
-            mime="text/csv",
-        )
-
-        # =================================================
-        # INVESTIGATION
-        # =================================================
-
-        st.header(
-            "Variants Requiring Investigation"
-        )
-
-        suspicious_reports = [
-            report
-            for report in reports
-            if report[
-                "requires_investigation"
-            ]
-        ]
-
-        if suspicious_reports:
-
-            for report in suspicious_reports:
-
-                with st.expander(
-                    report["variant"]
-                ):
-
-                    st.write(
-                        f"Depth: "
-                        f"{report['depth']}"
-                    )
-
-                    st.write(
-                        "Allele fraction: "
-                        f"{report['allele_fraction']}"
-                    )
-
-                    st.write(
-                        "Mapping quality: "
-                        f"{report['mapping_quality']}"
-                    )
-
-                    st.write(
-                        "Evidence:"
-                    )
-
-                    for reason in report[
-                        "reasons"
-                    ]:
-
-                        st.write(
-                            f"• {reason}"
-                        )
-
-                    st.warning(
-                        "Review this variant before "
-                        "treating it as reliable."
-                    )
-
-        else:
-
-            st.success(
-                "No variants currently require investigation."
+            st.dataframe(
+                artifact_df,
+                use_container_width=True,
+                hide_index=True,
             )
 
-        # =================================================
-        # INTERPRETATION
-        # =================================================
+            # ==================================================
+            # SUSPICIOUS CELLS
+            # ==================================================
 
-        st.header(
-            "Debugger Interpretation"
-        )
+            st.subheader(
+                "Cells Requiring Investigation"
+            )
 
-        st.write(
-            "Variant evidence identifies technical "
-            "patterns that may reduce confidence in "
-            "a variant call. It does not by itself "
-            "prove that a variant is false."
-        )
+            if reports:
 
-        st.caption(
-            "This prototype currently evaluates "
-            "VCF-level evidence such as depth, "
-            "allele fraction, and mapping quality."
-        )
+                report_df = pd.DataFrame(
+                    reports
+                )
+
+                st.dataframe(
+                    report_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            else:
+
+                st.success(
+                    "No cells currently meet the "
+                    "multi-evidence investigation criterion."
+                )
+
+            # ==================================================
+            # CELL TYPES
+            # ==================================================
+
+            st.subheader(
+                "Detected Biological Structure"
+            )
+
+            cell_types = processed.uns.get(
+                "cluster_cell_types",
+                {},
+            )
+
+            if cell_types:
+
+                type_df = pd.DataFrame(
+                    [
+                        {
+                            "Cluster": cluster,
+                            "Likely cell type": cell_type,
+                        }
+                        for cluster, cell_type
+                        in cell_types.items()
+                    ]
+                )
+
+                st.dataframe(
+                    type_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            # ==================================================
+            # CORRECTION
+            # ==================================================
+
+            st.subheader(
+                "Correction & Re-analysis"
+            )
+
+            if reports:
+
+                with st.spinner(
+                    "Applying debugging correction and re-analyzing..."
+                ):
+
+                    corrected = (
+                        correct_suspicious_cells(
+                            processed
+                        )
+                    )
+
+                    corrected = reanalyze(
+                        corrected
+                    )
+
+                    comparison = (
+                        compare_before_after(
+                            processed,
+                            corrected,
+                        )
+                    )
+
+                    score = calculate_trust_score(
+                        before_cells=processed.n_obs,
+                        after_cells=corrected.n_obs,
+                        before_clusters=processed.obs[
+                            "leiden"
+                        ].nunique(),
+                        after_clusters=corrected.obs[
+                            "leiden"
+                        ].nunique(),
+                        flagged_cells=len(
+                            reports
+                        ),
+                    )
+
+                    interpretation = (
+                        interpret_trust_score(
+                            score
+                        )
+                    )
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric(
+                    "Cells before",
+                    comparison[
+                        "before_cells"
+                    ],
+                )
+
+                c2.metric(
+                    "Cells after",
+                    comparison[
+                        "after_cells"
+                    ],
+                )
+
+                c3.metric(
+                    "Clusters after",
+                    comparison[
+                        "after_clusters"
+                    ],
+                )
+
+                st.info(
+                    f"**Debugging Stability Score: "
+                    f"{score}/100**\n\n"
+                    f"{interpretation}"
+                )
+
+                before_after = pd.DataFrame(
+                    {
+                        "Metric": [
+                            "Cells",
+                            "Clusters",
+                        ],
+                        "Before": [
+                            comparison[
+                                "before_cells"
+                            ],
+                            comparison[
+                                "before_clusters"
+                            ],
+                        ],
+                        "After": [
+                            comparison[
+                                "after_cells"
+                            ],
+                            comparison[
+                                "after_clusters"
+                            ],
+                        ],
+                    }
+                )
+
+                st.dataframe(
+                    before_after,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            else:
+
+                st.info(
+                    "No correction was required because "
+                    "no cells met the investigation criterion."
+                )
+
+            # ==================================================
+            # SCIENTIFIC LIMITATION
+            # ==================================================
+
+            st.caption(
+                "Biomedical Data Debugger flags evidence "
+                "requiring investigation. It does not establish "
+                "biological truth or clinical validity, and it "
+                "does not automatically declare cells or variants false."
+            )
+
+        except Exception as error:
+
+            st.error(
+                "The analysis could not be completed."
+            )
+
+            st.warning(
+                f"Reason: {error}"
+            )
+
+            st.info(
+                "Your original uploaded dataset was not "
+                "modified or overwritten."
+            )
+
+
+# ============================================================
+# DNA VARIANT DEBUGGER
+# ============================================================
+
+else:
+
+    st.header(
+        "DNA Variant Debugger"
+    )
+
+    st.write(
+        "Evaluate available sequencing evidence "
+        "and identify variants requiring investigation."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload a VCF or VCF.GZ file",
+        type=[
+            "vcf",
+            "gz",
+        ],
+    )
+
+    if uploaded_file is not None:
+
+        if st.button(
+            "Run DNA Variant Debugger",
+            type="primary",
+            use_container_width=True,
+        ):
+
+            temp_path = (
+                PROJECT_ROOT
+                / "data"
+                / "raw"
+                / "uploaded_variants.vcf"
+            )
+
+            temp_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            temp_path.write_bytes(
+                uploaded_file.getbuffer()
+            )
+
+            try:
+
+                records = load_vcf(
+                    temp_path
+                )
+
+                reports, summary = (
+                    debug_variants(
+                        records
+                    )
+                )
+
+                st.success(
+                    "DNA variant debugging complete."
+                )
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric(
+                    "Variants analyzed",
+                    summary[
+                        "variants_analyzed"
+                    ],
+                )
+
+                c2.metric(
+                    "Requires investigation",
+                    summary[
+                        "suspicious_records"
+                    ],
+                )
+
+                c3.metric(
+                    "Samples detected",
+                    len(
+                        summary[
+                            "samples"
+                        ]
+                    ),
+                )
+
+                st.subheader(
+                    "Variant Evidence"
+                )
+
+                display_rows = []
+
+                for report in reports:
+
+                    display_rows.append(
+                        {
+                            "Variant":
+                                report[
+                                    "variant"
+                                ],
+                            "Sample":
+                                report[
+                                    "sample"
+                                ],
+                            "Genotype":
+                                report[
+                                    "genotype"
+                                ],
+                            "Depth":
+                                report[
+                                    "depth"
+                                ],
+                            "Alt reads":
+                                report[
+                                    "alt_reads"
+                                ],
+                            "Allele fraction":
+                                report[
+                                    "allele_fraction"
+                                ],
+                            "Mapping quality":
+                                report[
+                                    "mapping_quality"
+                                ],
+                            "Variant quality":
+                                report[
+                                    "quality"
+                                ],
+                            "Evidence":
+                                report[
+                                    "artifact_evidence"
+                                ],
+                            "Status":
+                                (
+                                    "Requires investigation"
+                                    if report[
+                                        "requires_investigation"
+                                    ]
+                                    else
+                                    "No major artifact evidence"
+                                ),
+                        }
+                    )
+
+                if display_rows:
+
+                    st.dataframe(
+                        pd.DataFrame(
+                            display_rows
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                suspicious = [
+                    report
+                    for report in reports
+                    if report[
+                        "requires_investigation"
+                    ]
+                ]
+
+                if suspicious:
+
+                    st.subheader(
+                        "Why These Variants Were Flagged"
+                    )
+
+                    for report in suspicious:
+
+                        with st.expander(
+                            report[
+                                "variant"
+                            ]
+                        ):
+
+                            for reason in report[
+                                "reasons"
+                            ]:
+
+                                st.write(
+                                    f"- {reason}"
+                                )
+
+                            st.caption(
+                                "Evidence requiring investigation "
+                                "does not by itself prove that the "
+                                "variant is false."
+                            )
+
+            except Exception as error:
+
+                st.error(
+                    "The VCF could not be analyzed."
+                )
+
+                st.warning(
+                    f"Reason: {error}"
+                )
 
     else:
 
         st.info(
-            "Choose a VCF dataset from the sidebar "
-            "to begin debugging."
-        )
-
-        st.markdown(
-            """
-### DNA Variant Debugger
-
-Upload a `.vcf` file or use the synthetic
-demonstration VCF.
-
-The debugger investigates:
-
-- Sequencing depth
-- Alternate-allele support
-- Allele fraction
-- Mapping quality
-- Suspicious evidence patterns
-
-Variants are flagged for investigation rather
-than automatically declared false.
-            """
+            "Upload a VCF file to begin."
         )
