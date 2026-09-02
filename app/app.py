@@ -5,8 +5,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-    
+
+
 import streamlit as st
+import scanpy as sc
 
 from src.analysis.load_data import load_pbmc3k
 from src.qc.basic_qc import calculate_basic_qc
@@ -31,6 +33,10 @@ from src.analysis.trust_score import (
 )
 
 
+# =========================================================
+# PAGE
+# =========================================================
+
 st.set_page_config(
     page_title="Biomedical Data Debugger",
     page_icon="🧬",
@@ -38,15 +44,13 @@ st.set_page_config(
 )
 
 
-# -------------------------
-# TITLE
-# -------------------------
+# =========================================================
+# HEADER
+# =========================================================
 
 st.title("🧬 Biomedical Data Debugger")
 
-st.subheader(
-    "Artifact vs. True Biology"
-)
+st.subheader("Artifact vs. True Biology")
 
 st.write(
     "Don't trust the biological conclusion "
@@ -54,31 +58,101 @@ st.write(
 )
 
 
-# -------------------------
-# SIDEBAR
-# -------------------------
+# =========================================================
+# INPUT
+# =========================================================
 
-st.sidebar.header("Analysis")
+st.sidebar.header("1. Input Data")
 
-run_analysis = st.sidebar.button(
-    "Run scRNA-seq Debugger"
+input_method = st.sidebar.radio(
+    "Choose dataset",
+    [
+        "Demo dataset",
+        "Upload scRNA-seq (.h5ad)",
+    ],
 )
 
 
-# -------------------------
-# ANALYSIS
-# -------------------------
+adata = None
 
-if run_analysis:
 
-    with st.spinner(
-        "Running biomedical data debugger..."
+# ---------------------------------------------------------
+# DEMO DATASET
+# ---------------------------------------------------------
+
+if input_method == "Demo dataset":
+
+    st.sidebar.success(
+        "PBMC3k demonstration dataset selected."
+    )
+
+    if st.sidebar.button(
+        "Run scRNA-seq Debugger"
     ):
-
-        # Load
         adata = load_pbmc3k()
 
-        # QC
+
+# ---------------------------------------------------------
+# USER DATASET
+# ---------------------------------------------------------
+
+else:
+
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload an AnnData scRNA-seq dataset",
+        type=["h5ad"],
+    )
+
+    if uploaded_file is not None:
+
+        try:
+
+            adata = sc.read_h5ad(
+                uploaded_file
+            )
+
+            st.sidebar.success(
+                "Dataset loaded successfully."
+            )
+
+            st.sidebar.write(
+                f"Cells: {adata.n_obs}"
+            )
+
+            st.sidebar.write(
+                f"Genes: {adata.n_vars}"
+            )
+
+        except Exception as e:
+
+            st.sidebar.error(
+                "Could not read this .h5ad file."
+            )
+
+            st.sidebar.exception(e)
+
+    run_uploaded = st.sidebar.button(
+        "Run scRNA-seq Debugger"
+    )
+
+    if not run_uploaded:
+        adata = None
+
+
+# =========================================================
+# RUN ANALYSIS
+# =========================================================
+
+if adata is not None:
+
+    with st.spinner(
+        "Running Biomedical Data Debugger..."
+    ):
+
+        # -------------------------------------------------
+        # BASIC QC
+        # -------------------------------------------------
+
         adata = calculate_basic_qc(
             adata
         )
@@ -87,19 +161,25 @@ if run_analysis:
             adata
         )
 
-        # Doublets
+        # -------------------------------------------------
+        # DOUBLETS
+        # -------------------------------------------------
+
         adata = detect_doublets(
             adata
         )
 
-        # Stress
+        # -------------------------------------------------
+        # STRESS
+        # -------------------------------------------------
+
         adata = calculate_stress_score(
             adata
         )
 
-        # -------------------------
-        # BEFORE
-        # -------------------------
+        # -------------------------------------------------
+        # BEFORE ANALYSIS
+        # -------------------------------------------------
 
         analysis_adata = preprocess_scrna(
             adata
@@ -113,6 +193,9 @@ if run_analysis:
             analysis_adata
         )
 
+        # Copy cluster information back
+        # to original object.
+
         adata.obs["leiden"] = (
             analysis_adata.obs["leiden"]
         )
@@ -123,7 +206,10 @@ if run_analysis:
             ]
         )
 
-        # Ambient evidence
+        # -------------------------------------------------
+        # AMBIENT / LINEAGE EVIDENCE
+        # -------------------------------------------------
+
         analysis_adata = (
             calculate_ambient_rna_evidence(
                 analysis_adata
@@ -146,14 +232,17 @@ if run_analysis:
             ]
         )
 
-        # Aggregate evidence
+        # -------------------------------------------------
+        # EVIDENCE AGGREGATION
+        # -------------------------------------------------
+
         adata = aggregate_artifact_evidence(
             adata
         )
 
-        # -------------------------
-        # METRICS
-        # -------------------------
+        # -------------------------------------------------
+        # BEFORE
+        # -------------------------------------------------
 
         before_cells = adata.n_obs
 
@@ -167,9 +256,9 @@ if run_analysis:
             adata.obs["leiden"].nunique()
         )
 
-        # -------------------------
+        # -------------------------------------------------
         # CORRECTION
-        # -------------------------
+        # -------------------------------------------------
 
         corrected = (
             correct_suspicious_cells(
@@ -177,9 +266,9 @@ if run_analysis:
             )
         )
 
-        # -------------------------
+        # -------------------------------------------------
         # AFTER
-        # -------------------------
+        # -------------------------------------------------
 
         corrected = reanalyze(
             corrected
@@ -191,9 +280,9 @@ if run_analysis:
             corrected.obs["leiden"].nunique()
         )
 
-        # -------------------------
-        # TRUST
-        # -------------------------
+        # -------------------------------------------------
+        # TRUST SCORE
+        # -------------------------------------------------
 
         trust_score = (
             calculate_trust_score(
@@ -211,9 +300,9 @@ if run_analysis:
             )
         )
 
-    # -------------------------
-    # DASHBOARD
-    # -------------------------
+    # =====================================================
+    # RESULTS
+    # =====================================================
 
     st.success(
         "Analysis completed successfully."
@@ -247,9 +336,9 @@ if run_analysis:
             f"{trust_score}/100"
         )
 
-    # -------------------------
+    # =====================================================
     # BEFORE / AFTER
-    # -------------------------
+    # =====================================================
 
     st.header(
         "Before vs. After Debugging"
@@ -259,9 +348,7 @@ if run_analysis:
 
     with col1:
 
-        st.subheader(
-            "Before"
-        )
+        st.subheader("Before")
 
         st.write(
             f"Cells: {before_cells}"
@@ -273,9 +360,7 @@ if run_analysis:
 
     with col2:
 
-        st.subheader(
-            "After"
-        )
+        st.subheader("After")
 
         st.write(
             f"Cells: {after_cells}"
@@ -285,9 +370,9 @@ if run_analysis:
             f"Clusters: {after_clusters}"
         )
 
-    # -------------------------
-    # CONCLUSION
-    # -------------------------
+    # =====================================================
+    # BIOLOGICAL CONCLUSION
+    # =====================================================
 
     st.header(
         "Biological Conclusion"
@@ -297,9 +382,9 @@ if run_analysis:
         interpretation
     )
 
-    # -------------------------
-    # ARTIFACT BREAKDOWN
-    # -------------------------
+    # =====================================================
+    # ARTIFACT EVIDENCE
+    # =====================================================
 
     st.header(
         "Artifact Evidence"
@@ -329,30 +414,104 @@ if run_analysis:
         ].sum()
     )
 
-    st.write(
-        f"**Low-quality cells:** {low_quality}"
-    )
+    col1, col2, col3, col4 = st.columns(4)
 
-    st.write(
-        f"**Potential doublets:** {doublets}"
-    )
+    with col1:
+        st.metric(
+            "Low Quality",
+            low_quality
+        )
 
-    st.write(
-        f"**High-stress cells:** {stress}"
-    )
+    with col2:
+        st.metric(
+            "Potential Doublets",
+            doublets
+        )
 
-    st.write(
-        f"**Lineage-marker evidence:** {ambient}"
-    )
+    with col3:
+        st.metric(
+            "High Stress",
+            stress
+        )
+
+    with col4:
+        st.metric(
+            "Lineage Evidence",
+            ambient
+        )
 
     st.caption(
         "Lineage-marker evidence is a screening "
         "signal and does not prove ambient RNA."
     )
 
+    # =====================================================
+    # SUSPICIOUS CELLS
+    # =====================================================
+
+    st.header(
+        "Cells Requiring Investigation"
+    )
+
+    suspicious = adata.obs[
+        adata.obs[
+            "requires_investigation"
+        ]
+    ].copy()
+
+    if len(suspicious) > 0:
+
+        display_columns = [
+            "leiden",
+            "artifact_evidence_count",
+            "low_quality_flag",
+            "predicted_doublet",
+            "stress_flag",
+            "ambient_evidence",
+        ]
+
+        display_columns = [
+            column
+            for column in display_columns
+            if column in suspicious.columns
+        ]
+
+        st.dataframe(
+            suspicious[
+                display_columns
+            ]
+        )
+
+    else:
+
+        st.success(
+            "No cells currently require investigation."
+        )
+
 else:
 
     st.info(
-        "Click **Run scRNA-seq Debugger** "
-        "to analyze the demonstration dataset."
+        "Choose a dataset from the sidebar "
+        "to begin debugging."
+    )
+
+    st.markdown(
+        """
+### Supported input
+
+**`.h5ad` — AnnData single-cell RNA-seq dataset**
+
+The debugger will evaluate:
+
+- Quality control
+- Potential doublets
+- Stress response
+- Lineage-marker contamination evidence
+- Clustering
+- Cell-type signals
+- Suspicious-cell evidence
+- Correction
+- Re-analysis
+- Biological trust
+        """
     )
