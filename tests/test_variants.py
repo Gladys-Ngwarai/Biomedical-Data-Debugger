@@ -6,30 +6,61 @@ def main():
 
     path = "data/raw/test_variants.vcf"
 
-    vcf = load_vcf(path)
+    records = load_vcf(path)
+
+    reports, summary = debug_variants(records)
 
     print()
     print("DNA Variant Debugger")
     print("=" * 40)
 
     print(
-        f"Variants loaded: {len(vcf)}"
+        f"Variants analyzed: "
+        f"{summary['variants_analyzed']}"
     )
 
-    reports = debug_variants(vcf)
+    print(
+        f"Variants requiring investigation: "
+        f"{summary['suspicious_records']}"
+    )
+
+    if summary["samples"]:
+        samples = ", ".join(summary["samples"])
+    else:
+        samples = "None"
+
+    print(
+        f"Samples detected: {samples}"
+    )
 
     print()
 
     for report in reports:
 
         print(
-            f"Variant: "
-            f"{report['variant']}"
+            f"Variant: {report['variant']}"
         )
 
         print(
-            f"Depth: "
-            f"{report['depth']}"
+            f"Sample: {report['sample']}"
+        )
+
+        print(
+            f"Genotype: {report['genotype']}"
+        )
+
+        print(
+            f"Depth: {report['depth']}"
+        )
+
+        print(
+            f"Reference reads: "
+            f"{report['ref_reads']}"
+        )
+
+        print(
+            f"Alternate reads: "
+            f"{report['alt_reads']}"
         )
 
         print(
@@ -43,11 +74,25 @@ def main():
         )
 
         print(
+            f"Quality: "
+            f"{report['quality']}"
+        )
+
+        print(
+            f"Filter: "
+            f"{report['filter']}"
+        )
+
+        print(
             f"Evidence count: "
             f"{report['artifact_evidence']}"
         )
 
-        if report["reasons"]:
+        if report["requires_investigation"]:
+
+            print(
+                "Status: Requires investigation"
+            )
 
             print(
                 "Reasons: "
@@ -59,8 +104,7 @@ def main():
         else:
 
             print(
-                "Status: "
-                "No major artifact evidence"
+                "Status: No major artifact evidence"
             )
 
         print("-" * 40)

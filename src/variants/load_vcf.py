@@ -1,38 +1,74 @@
-import pandas as pd
+from pathlib import Path
+import gzip
+
+
+def open_variant_file(path):
+    """Open plain or gzipped VCF files as text."""
+
+    path = Path(path)
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Variant file not found: {path}"
+        )
+
+    if path.name.lower().endswith(".vcf.gz"):
+        return gzip.open(path, "rt")
+
+    if path.name.lower().endswith(".vcf"):
+        return open(path, "r")
+
+    raise ValueError(
+        "Unsupported file type. Use .vcf or .vcf.gz."
+    )
 
 
 def load_vcf(path):
     """
-    Load a VCF file into a pandas DataFrame.
+    Stream a VCF file record by record.
 
-    This lightweight loader focuses on standard variant
-    fields and FORMAT/sample evidence.
+    Supports .vcf and .vcf.gz files.
     """
 
-    records = []
+    with open_variant_file(path) as file:
 
-    with open(path, "r") as file:
+        header = None
 
-        for line in file:
+        for line_number, line in enumerate(file, start=1):
+
+            line = line.rstrip("\r\n")
+
+            if not line:
+                continue
 
             if line.startswith("##"):
                 continue
 
             if line.startswith("#CHROM"):
-
-                header = line.strip().split("\t")
-
+                header = line.split("\t")
                 continue
 
-            fields = line.strip().split("\t")
+            if header is None:
+                raise ValueError(
+                    "VCF header (#CHROM) was not found."
+                )
 
-            if len(fields) < 8:
-                continue
+            fields = line.split("\t")
 
-            record = dict(
+            if len(fields) != len(header):
+
+                # Some simple test files may contain
+                # whitespace instead of tabs.
+                fields = line.split()
+
+            if len(fields) != len(header):
+                raise ValueError(
+                    f"Malformed VCF record on line "
+                    f"{line_number}: expected "
+                    f"{len(header)} columns but found "
+                    f"{len(fields)}."
+                )
+
+            yield dict(
                 zip(header, fields)
             )
-
-            records.append(record)
-
-    return pd.DataFrame(records)
