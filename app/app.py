@@ -9,6 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import streamlit as st
 import scanpy as sc
+import pandas as pd
 
 from src.analysis.load_data import load_pbmc3k
 from src.qc.basic_qc import calculate_basic_qc
@@ -19,8 +20,12 @@ from src.analysis.cell_types import annotate_clusters
 from src.artifacts.low_quality import flag_low_quality_cells
 from src.artifacts.doublets import detect_doublets
 from src.artifacts.stress import calculate_stress_score
-from src.artifacts.ambient_rna import calculate_ambient_rna_evidence
-from src.artifacts.evidence import aggregate_artifact_evidence
+from src.artifacts.ambient_rna import (
+    calculate_ambient_rna_evidence
+)
+from src.artifacts.evidence import (
+    aggregate_artifact_evidence
+)
 
 from src.analysis.correction import (
     correct_suspicious_cells,
@@ -32,8 +37,14 @@ from src.analysis.trust_score import (
     interpret_trust_score,
 )
 
+from src.analysis.reporting import (
+    build_scrna_report,
+)
+
 from src.variants.load_vcf import load_vcf
-from src.variants.variant_debugger import debug_variants
+from src.variants.variant_debugger import (
+    debug_variants,
+)
 
 
 # =========================================================
@@ -53,7 +64,9 @@ st.set_page_config(
 
 st.title("🧬 Biomedical Data Debugger")
 
-st.subheader("Artifact vs. True Biology")
+st.subheader(
+    "Artifact vs. True Biology"
+)
 
 st.write(
     "Don't trust the biological conclusion "
@@ -62,7 +75,7 @@ st.write(
 
 
 # =========================================================
-# MODULE SELECTION
+# MODULE
 # =========================================================
 
 st.sidebar.header("1. Choose Module")
@@ -77,7 +90,7 @@ module = st.sidebar.radio(
 
 
 # =========================================================
-# SINGLE-CELL RNA-SEQ
+# SC-RNA MODULE
 # =========================================================
 
 if module == "Single-cell RNA-seq":
@@ -95,7 +108,7 @@ if module == "Single-cell RNA-seq":
     adata = None
 
     # -----------------------------------------------------
-    # DEMO DATASET
+    # DEMO
     # -----------------------------------------------------
 
     if input_method == "Demo dataset":
@@ -104,13 +117,15 @@ if module == "Single-cell RNA-seq":
             "PBMC3k demonstration dataset selected."
         )
 
-        if st.sidebar.button(
+        run_demo = st.sidebar.button(
             "Run scRNA-seq Debugger"
-        ):
+        )
+
+        if run_demo:
             adata = load_pbmc3k()
 
     # -----------------------------------------------------
-    # USER DATASET
+    # UPLOAD
     # -----------------------------------------------------
 
     else:
@@ -156,7 +171,7 @@ if module == "Single-cell RNA-seq":
             adata = None
 
     # =====================================================
-    # RUN scRNA ANALYSIS
+    # RUN
     # =====================================================
 
     if adata is not None:
@@ -165,24 +180,38 @@ if module == "Single-cell RNA-seq":
             "Running scRNA-seq debugger..."
         ):
 
-            # Basic QC
-            adata = calculate_basic_qc(adata)
+            # -------------------------------------------------
+            # QC
+            # -------------------------------------------------
+
+            adata = calculate_basic_qc(
+                adata
+            )
 
             adata = flag_low_quality_cells(
                 adata
             )
 
-            # Doublets
+            # -------------------------------------------------
+            # DOUBLETS
+            # -------------------------------------------------
+
             adata = detect_doublets(
                 adata
             )
 
-            # Stress
+            # -------------------------------------------------
+            # STRESS
+            # -------------------------------------------------
+
             adata = calculate_stress_score(
                 adata
             )
 
-            # Before analysis
+            # -------------------------------------------------
+            # BIOLOGICAL STRUCTURE
+            # -------------------------------------------------
+
             analysis_adata = preprocess_scrna(
                 adata
             )
@@ -195,7 +224,6 @@ if module == "Single-cell RNA-seq":
                 analysis_adata
             )
 
-            # Copy clustering information
             adata.obs["leiden"] = (
                 analysis_adata.obs["leiden"]
             )
@@ -206,7 +234,10 @@ if module == "Single-cell RNA-seq":
                 ]
             )
 
-            # Ambient / lineage evidence
+            # -------------------------------------------------
+            # LINEAGE EVIDENCE
+            # -------------------------------------------------
+
             analysis_adata = (
                 calculate_ambient_rna_evidence(
                     analysis_adata
@@ -229,12 +260,18 @@ if module == "Single-cell RNA-seq":
                 ]
             )
 
-            # Evidence aggregation
+            # -------------------------------------------------
+            # EVIDENCE
+            # -------------------------------------------------
+
             adata = aggregate_artifact_evidence(
                 adata
             )
 
-            # Before
+            # -------------------------------------------------
+            # BEFORE
+            # -------------------------------------------------
+
             before_cells = adata.n_obs
 
             flagged_cells = int(
@@ -247,14 +284,20 @@ if module == "Single-cell RNA-seq":
                 adata.obs["leiden"].nunique()
             )
 
-            # Correction
+            # -------------------------------------------------
+            # CORRECTION
+            # -------------------------------------------------
+
             corrected = (
                 correct_suspicious_cells(
                     adata
                 )
             )
 
-            # Re-analysis
+            # -------------------------------------------------
+            # REANALYSIS
+            # -------------------------------------------------
+
             corrected = reanalyze(
                 corrected
             )
@@ -265,7 +308,10 @@ if module == "Single-cell RNA-seq":
                 corrected.obs["leiden"].nunique()
             )
 
-            # Trust score
+            # -------------------------------------------------
+            # TRUST
+            # -------------------------------------------------
+
             trust_score = (
                 calculate_trust_score(
                     before_cells,
@@ -282,15 +328,38 @@ if module == "Single-cell RNA-seq":
                 )
             )
 
-        # =================================================
-        # RESULTS
-        # =================================================
+            # -------------------------------------------------
+            # REPORT
+            # -------------------------------------------------
+
+            report_summary, report_df = (
+                build_scrna_report(
+                    adata,
+                    before_cells,
+                    after_cells,
+                    before_clusters,
+                    after_clusters,
+                    flagged_cells,
+                    trust_score,
+                    interpretation,
+                )
+            )
+
+        # =====================================================
+        # SUCCESS
+        # =====================================================
 
         st.success(
-            "scRNA-seq analysis completed successfully."
+            "scRNA-seq debugging completed."
         )
 
-        st.header("Debugging Summary")
+        # =====================================================
+        # MAIN SUMMARY
+        # =====================================================
+
+        st.header(
+            "Debugging Summary"
+        )
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -302,7 +371,7 @@ if module == "Single-cell RNA-seq":
 
         with col2:
             st.metric(
-                "Suspicious Cells",
+                "Flagged",
                 flagged_cells
             )
 
@@ -318,58 +387,12 @@ if module == "Single-cell RNA-seq":
                 f"{trust_score}/100"
             )
 
-        # =================================================
-        # BEFORE / AFTER
-        # =================================================
+        # =====================================================
+        # WHAT HAPPENED?
+        # =====================================================
 
         st.header(
-            "Before vs. After Debugging"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.subheader("Before")
-
-            st.write(
-                f"Cells: {before_cells}"
-            )
-
-            st.write(
-                f"Clusters: {before_clusters}"
-            )
-
-        with col2:
-
-            st.subheader("After")
-
-            st.write(
-                f"Cells: {after_cells}"
-            )
-
-            st.write(
-                f"Clusters: {after_clusters}"
-            )
-
-        # =================================================
-        # BIOLOGICAL CONCLUSION
-        # =================================================
-
-        st.header(
-            "Biological Conclusion"
-        )
-
-        st.info(
-            interpretation
-        )
-
-        # =================================================
-        # ARTIFACT EVIDENCE
-        # =================================================
-
-        st.header(
-            "Artifact Evidence"
+            "What Did the Debugger Find?"
         )
 
         low_quality = int(
@@ -427,48 +450,138 @@ if module == "Single-cell RNA-seq":
             "signal and does not prove ambient RNA."
         )
 
-        # =================================================
-        # SUSPICIOUS CELLS
-        # =================================================
+        # =====================================================
+        # BEFORE / AFTER
+        # =====================================================
 
         st.header(
-            "Cells Requiring Investigation"
+            "Before vs. After Debugging"
         )
 
-        suspicious = adata.obs[
-            adata.obs[
-                "requires_investigation"
-            ]
-        ].copy()
+        col1, col2 = st.columns(2)
 
-        if len(suspicious) > 0:
+        with col1:
 
-            display_columns = [
-                "leiden",
-                "artifact_evidence_count",
-                "low_quality_flag",
-                "predicted_doublet",
-                "stress_flag",
-                "ambient_evidence",
-            ]
+            st.subheader(
+                "Before Debugging"
+            )
 
-            display_columns = [
-                column
-                for column in display_columns
-                if column in suspicious.columns
-            ]
+            st.write(
+                f"Cells: {before_cells}"
+            )
+
+            st.write(
+                f"Clusters: {before_clusters}"
+            )
+
+        with col2:
+
+            st.subheader(
+                "After Correction"
+            )
+
+            st.write(
+                f"Cells: {after_cells}"
+            )
+
+            st.write(
+                f"Clusters: {after_clusters}"
+            )
+
+        # =====================================================
+        # BIOLOGICAL CONCLUSION
+        # =====================================================
+
+        st.header(
+            "Biological Conclusion"
+        )
+
+        st.info(
+            interpretation
+        )
+
+        # =====================================================
+        # SUSPICIOUS CELLS
+        # =====================================================
+
+        st.header(
+            "Evidence-Level Investigation"
+        )
+
+        if len(report_df) > 0:
 
             st.dataframe(
-                suspicious[
-                    display_columns
-                ]
+                report_df,
+                use_container_width=True,
             )
+
+            csv = report_df.to_csv(
+                index=False
+            )
+
+            st.download_button(
+                "Download Suspicious Cell Report",
+                data=csv,
+                file_name=(
+                    "scrna_debug_report.csv"
+                ),
+                mime="text/csv",
+            )
+
+            # Detailed reasons
+            for _, row in report_df.iterrows():
+
+                with st.expander(
+                    f"{row['Cell']} — "
+                    f"{row['Likely Cell Type']}"
+                ):
+
+                    st.write(
+                        f"Cluster: {row['Cluster']}"
+                    )
+
+                    st.write(
+                        f"Evidence count: "
+                        f"{row['Evidence Count']}"
+                    )
+
+                    st.write(
+                        f"Why flagged: "
+                        f"{row['Reasons']}"
+                    )
+
+                    st.write(
+                        f"Recommendation: "
+                        f"{row['Recommendation']}"
+                    )
 
         else:
 
             st.success(
                 "No cells currently require investigation."
             )
+
+        # =====================================================
+        # INTERPRETATION
+        # =====================================================
+
+        st.header(
+            "Debugger Interpretation"
+        )
+
+        st.write(
+            "The debugger does not claim that flagged "
+            "cells are biologically false. It identifies "
+            "cells with multiple independent technical "
+            "signals and evaluates whether the overall "
+            "biological structure changes after correction."
+        )
+
+        st.caption(
+            "Trust score is a prototype interpretability "
+            "metric and is not a validated statistical "
+            "confidence measure."
+        )
 
     else:
 
@@ -479,28 +592,27 @@ if module == "Single-cell RNA-seq":
 
         st.markdown(
             """
-### Supported input
+### scRNA-seq Debugger
 
-**`.h5ad` — AnnData single-cell RNA-seq dataset**
+Upload an `.h5ad` AnnData dataset or use the
+PBMC3k demonstration dataset.
 
-The debugger evaluates:
+The debugger investigates:
 
-- Quality control
+- Quality problems
 - Potential doublets
-- Stress response
-- Lineage-marker contamination evidence
-- Clustering
-- Cell-type signals
-- Suspicious-cell evidence
-- Correction
-- Re-analysis
-- Biological trust
+- Stress responses
+- Lineage-marker evidence
+- Suspicious cells
+- Biological structure
+- Correction effects
+- Before/after stability
             """
         )
 
 
 # =========================================================
-# DNA VARIANT DEBUGGER
+# DNA VARIANT MODULE
 # =========================================================
 
 else:
@@ -527,16 +639,18 @@ else:
             "Synthetic demonstration VCF selected."
         )
 
-        if st.sidebar.button(
+        run_demo = st.sidebar.button(
             "Run DNA Variant Debugger"
-        ):
+        )
+
+        if run_demo:
 
             vcf = load_vcf(
                 "data/raw/test_variants.vcf"
             )
 
     # -----------------------------------------------------
-    # USER VCF
+    # UPLOAD VCF
     # -----------------------------------------------------
 
     else:
@@ -578,7 +692,7 @@ else:
             vcf = None
 
     # =====================================================
-    # RUN VARIANT ANALYSIS
+    # RUN
     # =====================================================
 
     if vcf is not None:
@@ -592,17 +706,21 @@ else:
             )
 
         st.success(
-            "DNA variant analysis completed successfully."
+            "DNA variant debugging completed."
         )
 
         # =================================================
         # SUMMARY
         # =================================================
 
-        total_variants = len(reports)
+        total_variants = len(
+            reports
+        )
 
         suspicious_variants = sum(
-            report["requires_investigation"]
+            report[
+                "requires_investigation"
+            ]
             for report in reports
         )
 
@@ -611,7 +729,9 @@ else:
             - suspicious_variants
         )
 
-        st.header("Variant Debugging Summary")
+        st.header(
+            "Variant Debugging Summary"
+        )
 
         col1, col2, col3 = st.columns(3)
 
@@ -634,7 +754,7 @@ else:
             )
 
         # =================================================
-        # VARIANT EVIDENCE
+        # EVIDENCE TABLE
         # =================================================
 
         st.header(
@@ -647,8 +767,12 @@ else:
 
             table_rows.append(
                 {
-                    "Variant": report["variant"],
-                    "Depth": report["depth"],
+                    "Variant": report[
+                        "variant"
+                    ],
+                    "Depth": report[
+                        "depth"
+                    ],
                     "Allele Fraction": report[
                         "allele_fraction"
                     ],
@@ -668,13 +792,28 @@ else:
                 }
             )
 
+        variant_df = pd.DataFrame(
+            table_rows
+        )
+
         st.dataframe(
-            table_rows,
-            use_container_width=True
+            variant_df,
+            use_container_width=True,
+        )
+
+        st.download_button(
+            "Download Variant Debug Report",
+            data=variant_df.to_csv(
+                index=False
+            ),
+            file_name=(
+                "variant_debug_report.csv"
+            ),
+            mime="text/csv",
         )
 
         # =================================================
-        # SUSPICIOUS VARIANTS
+        # INVESTIGATION
         # =================================================
 
         st.header(
@@ -693,35 +832,41 @@ else:
 
             for report in suspicious_reports:
 
-                st.subheader(
+                with st.expander(
                     report["variant"]
-                )
-
-                st.write(
-                    f"Depth: {report['depth']}"
-                )
-
-                st.write(
-                    "Allele fraction: "
-                    f"{report['allele_fraction']}"
-                )
-
-                st.write(
-                    "Mapping quality: "
-                    f"{report['mapping_quality']}"
-                )
-
-                st.write(
-                    "Evidence:"
-                )
-
-                for reason in report["reasons"]:
+                ):
 
                     st.write(
-                        f"• {reason}"
+                        f"Depth: "
+                        f"{report['depth']}"
                     )
 
-                st.divider()
+                    st.write(
+                        "Allele fraction: "
+                        f"{report['allele_fraction']}"
+                    )
+
+                    st.write(
+                        "Mapping quality: "
+                        f"{report['mapping_quality']}"
+                    )
+
+                    st.write(
+                        "Evidence:"
+                    )
+
+                    for reason in report[
+                        "reasons"
+                    ]:
+
+                        st.write(
+                            f"• {reason}"
+                        )
+
+                    st.warning(
+                        "Review this variant before "
+                        "treating it as reliable."
+                    )
 
         else:
 
@@ -729,10 +874,25 @@ else:
                 "No variants currently require investigation."
             )
 
+        # =================================================
+        # INTERPRETATION
+        # =================================================
+
+        st.header(
+            "Debugger Interpretation"
+        )
+
+        st.write(
+            "Variant evidence identifies technical "
+            "patterns that may reduce confidence in "
+            "a variant call. It does not by itself "
+            "prove that a variant is false."
+        )
+
         st.caption(
-            "Variant evidence indicates potential technical "
-            "problems; it does not by itself prove that a "
-            "variant is false."
+            "This prototype currently evaluates "
+            "VCF-level evidence such as depth, "
+            "allele fraction, and mapping quality."
         )
 
     else:
@@ -744,11 +904,12 @@ else:
 
         st.markdown(
             """
-### Supported input
+### DNA Variant Debugger
 
-**`.vcf` — Variant Call Format**
+Upload a `.vcf` file or use the synthetic
+demonstration VCF.
 
-The debugger evaluates available variant evidence such as:
+The debugger investigates:
 
 - Sequencing depth
 - Alternate-allele support
@@ -756,7 +917,7 @@ The debugger evaluates available variant evidence such as:
 - Mapping quality
 - Suspicious evidence patterns
 
-Variants are flagged for investigation rather than
-automatically declared false.
+Variants are flagged for investigation rather
+than automatically declared false.
             """
         )
