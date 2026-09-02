@@ -1,97 +1,100 @@
 import pandas as pd
 
 
-def build_scrna_report(
-    adata,
-    before_cells,
-    after_cells,
-    before_clusters,
-    after_clusters,
-    flagged_cells,
-    trust_score,
-    interpretation,
-):
+def build_scrna_summary(adata, reports):
+    """Build a concise scRNA-seq debugging summary."""
+
+    summary = {
+        "cells_analyzed": int(adata.n_obs),
+        "genes_analyzed": int(adata.n_vars),
+        "cells_requiring_investigation": len(reports),
+        "clusters": (
+            int(adata.obs["leiden"].nunique())
+            if "leiden" in adata.obs
+            else 0
+        ),
+    }
+
+    if "low_quality_flag" in adata.obs:
+        summary["low_quality_cells"] = int(
+            adata.obs["low_quality_flag"].sum()
+        )
+
+    if "predicted_doublet" in adata.obs:
+        summary["potential_doublets"] = int(
+            adata.obs["predicted_doublet"].sum()
+        )
+
+    if "stress_flag" in adata.obs:
+        summary["high_stress_cells"] = int(
+            adata.obs["stress_flag"].sum()
+        )
+
+    if "ambient_evidence" in adata.obs:
+        summary["ambient_marker_evidence"] = int(
+            adata.obs["ambient_evidence"].sum()
+        )
+
+    return summary
+
+
+def build_scrna_report(adata, reports):
     """
-    Build a human-readable scRNA-seq debugging report.
+    Create a human-readable debugging report.
+
+    This report describes evidence rather than claiming
+    biological truth.
     """
+
+    summary = build_scrna_summary(
+        adata,
+        reports,
+    )
+
+    return {
+        "summary": summary,
+        "investigations": reports,
+        "conclusion": (
+            "Cells listed as requiring investigation "
+            "have multiple artifact-related signals. "
+            "These signals do not prove that a cell "
+            "is biologically false."
+        ),
+    }
+
+
+def reports_to_dataframe(reports):
+    """Convert investigation reports into a UI-friendly table."""
+
+    if not reports:
+        return pd.DataFrame(
+            columns=[
+                "Cell",
+                "Cluster",
+                "Evidence count",
+                "Reasons",
+                "Recommendation",
+            ]
+        )
 
     rows = []
 
-    suspicious = adata.obs[
-        adata.obs["requires_investigation"]
-    ]
-
-    for cell_id, row in suspicious.iterrows():
-
-        reasons = []
-
-        if row["low_quality_flag"]:
-            reasons.append("Low quality")
-
-        if row["predicted_doublet"]:
-            reasons.append("Potential doublet")
-
-        if row["stress_flag"]:
-            reasons.append("High stress response")
-
-        if row["ambient_evidence"]:
-            source = row.get(
-                "ambient_source",
-                ""
-            )
-
-            if source:
-                reasons.append(
-                    f"Unexpected {source} marker signal"
-                )
-            else:
-                reasons.append(
-                    "Lineage-marker evidence"
-                )
-
-        cluster = row.get(
-            "leiden",
-            "Unknown"
-        )
-
-        cell_type = adata.uns.get(
-            "cluster_cell_types",
-            {}
-        ).get(
-            str(cluster),
-            "Unknown"
-        )
+    for report in reports:
 
         rows.append(
             {
-                "Cell": cell_id,
-                "Cluster": cluster,
-                "Likely Cell Type": cell_type,
-                "Evidence Count": int(
-                    row[
-                        "artifact_evidence_count"
-                    ]
+                "Cell": report["cell"],
+                "Cluster": report["cluster"],
+                "Evidence count": report[
+                    "artifact_evidence_count"
+                ],
+                "Reasons": "; ".join(
+                    report["reasons"]
                 ),
-                "Reasons": "; ".join(reasons),
-                "Recommendation": (
-                    "Review before exclusion"
-                ),
+                "Recommendation": report[
+                    "recommendation"
+                ],
             }
         )
 
-    report_df = pd.DataFrame(rows)
-
-    summary = {
-        "Cells Before": before_cells,
-        "Cells After": after_cells,
-        "Cells Removed": (
-            before_cells - after_cells
-        ),
-        "Clusters Before": before_clusters,
-        "Clusters After": after_clusters,
-        "Suspicious Cells": flagged_cells,
-        "Trust Score": trust_score,
-        "Interpretation": interpretation,
-    }
-
-    return summary, report_df
+    return pd.DataFrame(rows)
